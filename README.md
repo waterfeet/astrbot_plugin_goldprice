@@ -1,8 +1,6 @@
-# helloworld
+# goldprice
 
-AstrBot 插件模板
-
-A template plugin for AstrBot plugin feature
+使用/gold   实时查询金价
 
 # 支持
 
