@@ -1,5 +1,6 @@
-import requests
 from astrbot.api import logger
+
+import httpx
 
 class HfCtrl:
 
@@ -12,16 +13,24 @@ class HfCtrl:
         self._codes = ["gds_AUTD"]
 
     def init(self):
+        self.client = httpx.AsyncClient(timeout=5)
         self._load(initial=True)
 
-    def _load(self, initial=False):
+    async def close(self):
+        await self.client.aclose()
+
+
+    
+    async def _load(self, initial=False):
         try:
             url = self._api.replace("@CODE@", ",".join(self._codes))
-            response = requests.get(url, headers=self.headers, timeout=5)
+            response = await self.client.get(url, headers=self.headers)
             if response.status_code == 200:
                 self._parse_js_data(response.text)
         except Exception as e:
             logger.error(f"获取数据失败: {str(e)}")
+
+
     def _parse_js_data(self, js_text):
         """解析JS数据并存入实例变量"""
         self.data.clear()
