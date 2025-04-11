@@ -14,7 +14,7 @@ class GoldPricePlugin(Star):
     @filter.command("gold")
     async def gold_check(self, event: AstrMessageEvent):
         '''金价查询指令''' 
-        self.gold.init()
+        await self.gold._load(initial=True)
         price_data = self.gold.get_price("gds_AUTD")
         if not price_data:
             yield event.plain_result("⚠️ 暂时无法获取黄金价格，请稍后再试")
