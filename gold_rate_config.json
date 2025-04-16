@@ -1,0 +1,12 @@
+{
+    "exchange_mapping": {
+        "上海": "gds_AUTD",
+        "纽约": "hf_GC",
+        "伦敦": "hf_XAU"
+    },
+    "cache_ttl": 300,
+    "retry_policy": {
+        "max_retries": 3,
+        "backoff_factor": 1.5
+    }
+}
