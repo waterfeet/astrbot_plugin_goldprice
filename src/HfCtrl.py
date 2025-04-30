@@ -40,6 +40,7 @@ class HfCtrl:
         self.transport = httpx.AsyncHTTPTransport(
             retries=3,
             http2=True,
+            verify=False,
             limits=httpx.Limits(
                 max_connections=200,
                 max_keepalive_connections=50
@@ -51,7 +52,8 @@ class HfCtrl:
             transport=self.transport,
             timeout=httpx.Timeout(10.0, connect=5.0),
             http2=True,
-            headers={'User-Agent': 'AstrBot GoldRatePlugin/1.0'}
+            verify=False,
+            headers={'User-Agent': 'Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_6_8; en-us) AppleWebKit/534.50 (KHTML, like Gecko) Version/5.1 Safari/534.50'}
         )
         return self
 
