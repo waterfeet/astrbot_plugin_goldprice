@@ -1,161 +1,119 @@
+import requests
 import asyncio
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
-from .src.HfCtrl import HfCtrl
-from dataclasses import dataclass
-from typing import Dict, List
 
-@dataclass
-class GoldPriceCard:
-    """金价信息卡片数据结构"""
-    exchange: str  # 交易所名称[3](@ref)
-    current_price: float
-    price_change: float
-    change_rate: float
-    open_price: float
-    last_close: float
-    high: float
-    low: float
+# --- 配置常量 (源自新脚本) ---
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Referer': 'https://www.guojijinjia.com/'
+}
 
-    @property
-    def change_symbol(self) -> str:
-        return "↑" if self.price_change > 0 else "↓" if self.price_change < 0 else "–"
+DATA_API = "https://www.guojijinjia.com/d/gold.js?codes={}"
 
-@register("gold_rate", "wheneverlethe", "多交易所金价查询插件", "2.0.0")
+TARGETS = [
+    # 黄金
+    {"name": "伦敦金", "code": "hf_XAU", "type": "gold", "loc": "伦敦", "unit": "美元/盎司"},
+    {"name": "纽约金", "code": "hf_GC", "type": "gold", "loc": "纽约", "unit": "美元/盎司"},
+    {"name": "上海金", "code": "gds_AUTD", "type": "gold", "loc": "上海", "unit": "人民币/克"},
+    # 白银
+    {"name": "伦敦银", "code": "hf_XAG", "type": "silver", "loc": "伦敦", "unit": "美元/盎司"},
+    {"name": "纽约银", "code": "hf_SI", "type": "silver", "loc": "纽约", "unit": "美元/盎司"},
+    {"name": "上海银", "code": "gds_AGTD", "type": "silver", "loc": "上海", "unit": "人民币/千克"},
+]
 
-
+@register("gold_rate", "waterfeet", "多交易所金价查询插件", "2.0.2")
 class GoldPricePlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
-        self.ctrl = HfCtrl()  # 插件级唯一实例
-        self._conn_lock = asyncio.Lock()
-        self._is_connected = False
-        self.supported_exchanges = ["上海", "纽约", "伦敦"]
 
-    async def _ensure_connection(self):
-        async with self._conn_lock:
-            if not self._is_connected:
-                await self.ctrl.__aenter__()  # 手动触发异步上下文
-                self._is_connected = True
-                logger.info("HfCtrl连接已建立")  # 网页6的日志监控特性
+    def _fetch_data_map_sync(self, codes_list):
+        """同步请求逻辑 (源自新脚本 fetch_data_map)"""
+        url = DATA_API.format(",".join(codes_list))
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=10)
+            resp.raise_for_status()
+            text = resp.text
+        except Exception as e:
+            logger.error(f"接口请求失败: {e}")
+            return {}
 
+        data_map = {}
+        # 解析数据
+        statements = text.split(';')
+        for stmt in statements:
+            if 'var hq_str_' in stmt:
+                parts = stmt.split('=')
+                if len(parts) == 2:
+                    key = parts[0].replace('var hq_str_', '').strip()
+                    val_str = parts[1].strip('"').strip("'")
+                    val_arr = val_str.split(',')
+                    data_map[key] = val_arr
+        return data_map
+
+    def _format_beauty_string(self, item_config, data_arr):
+        """格式化逻辑 (源自新脚本 format_beauty_string)"""
+        if not data_arr or len(data_arr) < 9:
+            return f"⚠️ {item_config['name']} 数据获取异常"
+
+        try:
+            # 提取基础数据
+            curr = float(data_arr[0])
+            high = float(data_arr[4])
+            low = float(data_arr[5])
+            prev_close = float(data_arr[7])
+            open_price = float(data_arr[8])
+
+            # 计算涨跌
+            change = curr - prev_close
+            change_pct = (change / prev_close) * 100 if prev_close != 0 else 0
+
+            # 符号处理
+            symbol = "+" if change > 0 else ""
+            arrow = "↑" if change > 0 else ("↓" if change < 0 else "-")
+            
+            # 标题栏图标
+            icon = "🟡" if item_config['type'] == 'gold' else "⚪"
+            title_text = f"实时黄金行情" if item_config['type'] == 'gold' else f"实时白银行情"
+
+            # 格式化输出模板
+            output = (
+                f"📊 **{title_text}** ({item_config['name']})\n"
+                f"🏛️ 交易所：{item_config['loc']}\n"
+                f"💰 当前价：`{curr:.2f}` {arrow} ({item_config['unit']})\n"
+                f"📈 涨跌幅：{symbol}{change:.2f} ({symbol}{change_pct:.2f}%)\n"
+                f"🌅 今开/昨收：{open_price:.2f} / {prev_close:.2f}\n"
+                f"⬆️ 最高/最低：{high:.2f} / {low:.2f}\n"
+            )
+            return output
+        except Exception as e:
+            return f"❌ {item_config['name']} 解析错误: {e}"
 
     @filter.command("gold")
-    async def gold_check(self, event: AstrMessageEvent, exchange: str = None ):
-        '''金价查询指令'''           
-        try:
-            await self._ensure_connection()
-            # 参数校验与转换
-            exchange = exchange or "上海"
-            if exchange not in self.supported_exchanges:
-                return event.plain_result(f"⚠️ 暂不支持{exchange}交易所，可选：{', '.join(self.supported_exchanges)}")
-
-            code = self.ctrl.exchange_codes["exchange_mapping"][exchange]
-            if not code:
-                return event.plain_result("⚠️ 交易所配置异常，请联系管理员")
-
-            price_data = await self.ctrl.get_price(code)
-            return await self._format_response(event, exchange, price_data)
+    async def gold(self, event: AstrMessageEvent):
+        '''查询实时黄金/白银价格'''
         
+        # 1. 准备代码列表
+        code_list = [item['code'] for item in TARGETS]
+        
+        # 2. 在线程池中执行同步请求，避免阻塞 Bot
+        loop = asyncio.get_running_loop()
+        try:
+            data_map = await loop.run_in_executor(None, self._fetch_data_map_sync, code_list)
         except Exception as e:
-            logger.error(f"查询异常：{str(e)}")
-            return event.plain_result("🔧 服务暂时不可用，工程师正在抢修中")     
+            return event.plain_result(f"数据请求发生错误: {e}")
+
+        if not data_map:
+            return event.plain_result("⚠️ 未能获取到行情数据，请稍后再试。")
+
+        # 3. 格式化输出
+        result_texts = []
+        for item in TARGETS:
+            raw_data = data_map.get(item['code'])
+            beauty_str = self._format_beauty_string(item, raw_data)
+            result_texts.append(beauty_str)
         
-    
-
-    async def _format_response(self, event: AstrMessageEvent, exchange: str, price_data: dict) -> MessageEventResult:
-        """统一格式化响应"""
-        card = GoldPriceCard(
-        exchange=exchange,
-        current_price=price_data["price"],
-        price_change=price_data["change"],
-        change_rate=price_data["change_rate"],
-        open_price=price_data["open"],
-        last_close=price_data["last_close"],
-        high=price_data["high"],
-        low=price_data["low"],
-        )
-
-       # 创建带日志校验的平台映射
-        platform_mapping = {
-            "qq": self._render_qq,
-            "qq_channel": self._render_qq,
-            "wecom": self._render_wecom  # 修正webchat为框架标准标识符wecom
-        }
-
-        # 获取平台标识符（根据框架实现可能需要event.platform.value）
-        current_platform = event.platform.name.lower()  # 统一转小写 
-        logger.debug(f"当前平台标识符：{current_platform}")
-
-        # 带容错的选择渲染器
-        renderer = platform_mapping.get(
-            current_platform,
-            self._render_default  # 默认使用通用渲染
-        )
-
-        # 立即执行异步渲染
-        try:
-            return await renderer(event, card)
-        except KeyError as e:
-            logger.error(f"渲染失败：{str(e)}")
-            return event.plain_result("⚠️ 消息渲染异常，请联系管理员")
-
-    async def terminate(self):
-        """安全关闭资源"""
-        if self.ctrl.client:
-            await self.ctrl.client.aclose()
-        logger.info("金价插件已安全停止")
-
-    async def _render_qq(self, event: AstrMessageEvent, card: GoldPriceCard) -> MessageEventResult:
-        """QQ/QQ频道富文本渲染（Markdown+图片）"""
-
-        # 构建Markdown消息模板
-        md_content = (
-            "📊 **实时黄金行情**\n"
-            f"🏛️ 交易所：{card.exchange}\n"
-            f"💰 当前价：`{card.current_price:.2f}` {card.change_symbol}\n"
-            f"📈 涨跌幅：{card.price_change:+.2f} ({card.change_rate:.2f}%)\n"
-            f"🌅 今开/昨收：{card.open_price:.2f} / {card.last_close:.2f}\n"
-            f"⬆️ 最高/最低：{card.high:.2f} / {card.low:.2f}\n"
-        )
-    
-    # 返回复合消息（Markdown+图片）
-        return event.composite_result(
-        event.markdown_result(md_content),
-        event.image_result(card.trend_chart) if card.trend_chart else None
-    )
-
-    async def _render_wecom(self, event: AstrMessageEvent, card: GoldPriceCard) -> MessageEventResult:
-        """企业微信卡片消息（支持图文混合）"""
-        # 生成趋势图缩略图
-    
-        # 构建企业微信卡片消息规范
-        card_data = {
-            "title": f"{card.exchange}黄金行情",
-            "description": (
-                f"🏛️ 交易所：{card.exchange}\n"
-                f"💰 当前价：`{card.current_price:.2f}` {card.change_symbol}\n"
-                f"📈 涨跌幅：{card.price_change:+.2f} ({card.change_rate:.2f}%)\n"
-                f"🌅 今开/昨收：{card.open_price:.2f} / {card.last_close:.2f}\n"
-                f"⬆️ 最高/最低：{card.high:.2f} / {card.low:.2f}\n"
-            ),
-            "url": "https://www.guojijinjia.com",  # 跳转链接
-            "button": [{
-                "text": "查看详情",
-                "key": "view_detail"
-            }]
-        }
-        return event.card_result(card_data)
-
-    async def _render_default(self, event: AstrMessageEvent, card: GoldPriceCard) -> MessageEventResult:
-        """通用文本渲染（适配不支持富文本的平台）"""
-        text_content = (
-                "📊 **实时黄金行情**\n"
-                f"🏛️ 交易所：{card.exchange}\n"
-                f"💰 当前价：`{card.current_price:.2f}` {card.change_symbol}\n"
-                f"📈 涨跌幅：{card.price_change:+.2f} ({card.change_rate:.2f}%)\n"
-                f"🌅 今开/昨收：{card.open_price:.2f} / {card.last_close:.2f}\n"
-                f"⬆️ 最高/最低：{card.high:.2f} / {card.low:.2f}\n"
-        )
-        return event.plain_result(text_content)
+        # 4. 拼接并返回结果
+        final_msg = "\n".join(result_texts)
+        return event.plain_result(final_msg)
