@@ -23,7 +23,7 @@ TARGETS = [
     {"name": "上海银", "code": "gds_AGTD", "type": "silver", "loc": "上海", "unit": "人民币/千克"},
 ]
 
-@register("gold_rate", "waterfeet", "多交易所金价查询插件", "2.0.2")
+@register("gold_rate", "waterfeet", "多交易所金价查询插件", "2.2")
 class GoldPricePlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
